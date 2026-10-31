@@ -24,6 +24,8 @@ logging.basicConfig(
 # httpx registra las URLs completas, que incluyen el token. Lo silenciamos.
 logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("gress")
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
+logging.getLogger("googleapiclient.discovery_cache").setLevel(logging.ERROR)
 
 # Solo acepta mensajes de tu chat
 SOLO_MARC = filters.Chat(chat_id=CHAT_ID)
