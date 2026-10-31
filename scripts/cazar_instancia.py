@@ -1,6 +1,7 @@
 """
-Intenta crear la instancia gratuita de Oracle cada pocos minutos hasta conseguirlo.
+Intenta crear una instancia de Oracle cada pocos minutos hasta conseguirlo.
 Cuando lo consigue, avisa por Telegram con la IP pública.
+La máquina que busca se configura en el .env (OCI_NAME, OCI_SHAPE, OCI_IMAGE...).
 """
 import os
 import random
@@ -13,11 +14,17 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
+os.makedirs("logs", exist_ok=True)
+logging.basicConfig(
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("logs/cazador.log", encoding="utf-8"),
+    ],
+)
 log = logging.getLogger("cazador")
 
-NOMBRE = os.getenv("OCI_NAME", "gress-01")
-SHAPE = os.getenv("OCI_SHAPE", "VM.Standard.A1.Flex")
 INTERVALO = 300  # segundos entre intentos (5 min)
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -26,8 +33,10 @@ COMPARTMENT = os.getenv("OCI_COMPARTMENT")
 AD = os.getenv("OCI_AD")
 SUBNET = os.getenv("OCI_SUBNET")
 IMAGE = os.getenv("OCI_IMAGE")
-OCPUS = float(os.getenv("OCI_OCPUS", "4"))
-MEMORY = float(os.getenv("OCI_MEMORY", "24"))
+NOMBRE = os.getenv("OCI_NAME", "gress-01")
+SHAPE = os.getenv("OCI_SHAPE", "VM.Standard.A1.Flex")
+OCPUS = float(os.getenv("OCI_OCPUS", "2"))
+MEMORY = float(os.getenv("OCI_MEMORY", "12"))
 SSH_PUBKEY = os.getenv("SSH_PUBKEY")
 
 config = oci.config.from_file()
@@ -90,7 +99,8 @@ def main():
         log.info("Ya existe una instancia llamada %s. No hago nada.", NOMBRE)
         return
 
-    log.info("Buscando capacidad para %s (%s)...", NOMBRE, SHAPE)
+    tamano = f"{OCPUS} OCPU / {MEMORY} GB" if SHAPE.endswith(".Flex") else "tamaño fijo"
+    log.info("Buscando capacidad para %s (%s, %s)...", NOMBRE, SHAPE, tamano)
     intento = 0
     while True:
         intento += 1
@@ -105,7 +115,7 @@ def main():
             ip = ip_publica(instancia.id)
             log.info("Instancia en marcha. IP pública: %s", ip)
             avisar(
-                f"Servidor conseguido tras {intento} intentos.\n"
+                f"Servidor {NOMBRE} conseguido tras {intento} intentos.\n"
                 f"IP pública: {ip}\n"
                 f"Conéctate con: ssh opc@{ip}"
             )

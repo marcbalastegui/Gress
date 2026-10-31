@@ -164,7 +164,15 @@ async def intruso(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     memoria.iniciar()  # Crea las tablas si no existen
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+    app = (
+        ApplicationBuilder()
+        .token(TELEGRAM_TOKEN)
+        .connect_timeout(20)
+        .read_timeout(20)
+        .get_updates_connect_timeout(20)
+        .get_updates_read_timeout(30)
+        .build()
+    )
 
     # Comandos
     app.add_handler(CommandHandler("start", start, filters=SOLO_MARC))
