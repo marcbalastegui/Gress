@@ -16,7 +16,7 @@ Con un script de python que servia para "cazar" la instancia, que lanzaba la pet
 
 Esto se debía a varias causas:
 - Los que pagan, tienen prioridad. Solo una parte de los servidores físicos se destina a los del plan gratuito
-- Lo mismo que hacía yo, lo hacían otras muchas personas. Es decir, una máquina de 24 GB gratis, cubre las necesidades de cualquier usuario
+- Lo mismo que hacía yo, lo hacían otras muchas personas. Es decir, una máquina de 24 GB, 4 núcleos y 200 GB disco gratis, cubre las necesidades de cualquier usuario, así que era tarea complicada que alguien borrara su máquina
 - Los huecos solo aparecen si otra persona borra una máquina, y con lo difícil que es conseguir una, nadie la quiere.
 
 Así que tocaba buscar otras opciones
