@@ -4,7 +4,13 @@ En esta fase documento el proceso entero de la preparación y protección del se
 **Objetivo:** Tener una máquina las 24 horas encendida a la que solo pueda entrar yo, con un firewall cerrado y protecciñon contra ataques automáticos.
 
 ## 1. El plan inicial
-El plan inicial era usar Oracle Cloud Always Free, un plan que da Oracle, máquinas ARM de 4 núcleos con 24 GB de RAM, una capa muy generosa comparada con la competencia por lo que la demanda es alta. La primera vez que intenté crear la instancia, no pude, por el error `Out of Host capacity`. Lo que básicamente significa que en los centros de datos de Madrid (La región que escogí) no quedaba hueco para una máquina más.
+El plan inicial era usar Oracle Cloud Always Free, un plan que da Oracle, máquinas ARM de 4 núcleos con 24 GB de RAM, una capa muy generosa comparada con la competencia por lo que la demanda es alta. 
+
+Monté una clave SSH en mi PC
+
+La primera vez que intenté crear la instancia, no pude, por el error `Out of Host capacity`. Lo que básicamente significa que en los centros de datos de Madrid (La región que escogí) no quedaba hueco para una máquina más.
+
+
 
 Con un script de python que servia para "cazar" la instancia, que lanzaba la petición cada 5 minutos, intenté durante unas 2 semanas conseguirla, pero siempre salía el mismo problema "Out of host capacity". Incluso lo intenté con la máquina más pequeña.
 
