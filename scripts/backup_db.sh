@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Copia de seguridad diaria de la BD
 set -euo pipefail
+cd /
 
 ORIGEN="/opt/gress/app/gress.db"
 DESTINO="/opt/gress/backups"
