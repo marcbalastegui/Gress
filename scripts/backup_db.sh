@@ -2,6 +2,7 @@
 # Copia de seguridad diaria de la BD
 set -euo pipefail
 cd /
+umask 077
 
 ORIGEN="/opt/gress/app/gress.db"
 DESTINO="/opt/gress/backups"
