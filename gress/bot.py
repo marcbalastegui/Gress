@@ -7,7 +7,10 @@ from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, filters,
 )
-
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
+    ContextTypes, filters,
+)
 from gress.config import TELEGRAM_TOKEN, CHAT_ID
 from gress.tiempo import tiempo_barcelona
 from gress.interprete import interpretar, interpretar_relativo
@@ -45,6 +48,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/tiempo - previsión de hoy\n"
         "/agenda - próximos eventos\n"
         "/resumen - resumen del día\n"
+        "/etiquetar - poner categoría y tema a los vídeos\n"
+        "/videos - estadísticas de los últimos vídeo\n"
         "/recordatorios - recordatorios pendientes\n"
         "/borrar_rec N - cancelar el recordatorio N\n\n"
         "Para el calendario: 'apunta que mañana...' o 'recuérdame el viernes a las 17:00...'\n"
@@ -119,8 +124,10 @@ async def videos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(texto)
 
 async def texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if await videos.recibir_tema(update, context):
+        return
     mensaje = update.message.text
-
+    
     # 1. ¿Es un recordatorio relativo? ("recuérdame en 2 horas...")
     rel = interpretar_relativo(mensaje)
     if rel:
@@ -194,7 +201,8 @@ def main():
     app.add_handler(CommandHandler("recordatorios", recordatorios, filters=SOLO_MARC))
     app.add_handler(CommandHandler("borrar_rec", borrar_rec, filters=SOLO_MARC))
     app.add_handler(CommandHandler("videos", videos_cmd, filters=SOLO_MARC))
-    
+    app.add_handler(CommandHandler("etiquetar", videos.etiquetar, filters=SOLO_MARC))
+    app.add_handler(CallbackQueryHandler(videos.elegir_categoria, pattern=r"^cat:"))
     # Mensajes de texto
     app.add_handler(MessageHandler(SOLO_MARC & filters.TEXT & ~filters.COMMAND, texto))
     app.add_handler(MessageHandler(~SOLO_MARC, intruso))
@@ -205,6 +213,7 @@ def main():
     jq.run_repeating(comprobar_proximos, interval=300, first=10, name="avisos_eventos")
     jq.run_repeating(enviar_recordatorios, interval=30, first=5, name="recordatorios")
     jq.run_repeating(videos.comprobar_videos, interval=3600, first=60, name="videos")
+    jq.run_daily(videos.resumen_semanal, time=datetime.time(23, 0, tzinfo=MADRID), days=(0,), name="videos_semanal")
     log.info("Gress arrancado, esperando mensajes...")
     app.run_polling()
 

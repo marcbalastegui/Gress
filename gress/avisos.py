@@ -7,6 +7,7 @@ from gress.config import CHAT_ID
 from gress.tiempo import tiempo_barcelona
 from gress.calendario import eventos_de_hoy, eventos_entre, MADRID
 from gress import memoria
+from gress import videos
 
 log = logging.getLogger("gress")
 
@@ -30,6 +31,13 @@ def texto_resumen():
         tiempo_barcelona(),
         "",
     ]
+    try:
+        video = videos.texto_video_hoy()
+    except Exception:
+        log.exception("No se pudo leer el vídeo de hoy")
+        video = None
+    if video:
+        partes += [video, ""]
     eventos = eventos_de_hoy()
     if eventos:
         partes.append("Hoy tienes:")
