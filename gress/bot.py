@@ -16,6 +16,7 @@ from gress.avisos import (
     resumen_manana, comprobar_proximos, enviar_recordatorios, texto_resumen,
 )
 from gress import memoria
+from gress import videos
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -109,6 +110,13 @@ async def borrar_rec(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text("No existe ese recordatorio o ya se envió.")
 
+async def videos_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        texto = await asyncio.to_thread(videos.texto_videos)
+    except Exception:
+        log.exception("Error leyendo los vídeos")
+        texto = "No he podido leer YouTube. Mira los logs."
+    await update.message.reply_text(texto)
 
 async def texto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     mensaje = update.message.text
@@ -165,6 +173,7 @@ async def intruso(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     memoria.iniciar()  # Crea las tablas si no existen
+    videos.iniciar()
 
     app = (
         ApplicationBuilder()
@@ -184,7 +193,8 @@ def main():
     app.add_handler(CommandHandler("resumen", resumen, filters=SOLO_MARC))
     app.add_handler(CommandHandler("recordatorios", recordatorios, filters=SOLO_MARC))
     app.add_handler(CommandHandler("borrar_rec", borrar_rec, filters=SOLO_MARC))
-
+    app.add_handler(CommandHandler("videos", videos_cmd, filters=SOLO_MARC))
+    
     # Mensajes de texto
     app.add_handler(MessageHandler(SOLO_MARC & filters.TEXT & ~filters.COMMAND, texto))
     app.add_handler(MessageHandler(~SOLO_MARC, intruso))
@@ -194,7 +204,7 @@ def main():
     jq.run_daily(resumen_manana, time=datetime.time(7, 30, tzinfo=MADRID), name="resumen_manana")
     jq.run_repeating(comprobar_proximos, interval=300, first=10, name="avisos_eventos")
     jq.run_repeating(enviar_recordatorios, interval=30, first=5, name="recordatorios")
-
+    jq.run_repeating(videos.comprobar_videos, interval=3600, first=60, name="videos")
     log.info("Gress arrancado, esperando mensajes...")
     app.run_polling()
 

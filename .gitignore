@@ -3,7 +3,7 @@
 *.pem
 *.key
 credentials.json
-token.json
+token*.json
 
 # Python
 venv/
