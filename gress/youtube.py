@@ -1,5 +1,5 @@
 """
-Acceso a YouTube (canal Medular2) con permisos de solo lectura.
+Acceso al canal de YouTube de AnimaMed con permisos de solo lectura.
 
 Usa su propia autorización (token_youtube.json), separada de la del calendario
 (token.json), porque el canal está en otra cuenta de Google.
@@ -119,6 +119,37 @@ def retencion(video_id, desde, hasta):
         return None, None
     _, duracion_media, porcentaje = filas[0]
     return porcentaje, duracion_media
+
+
+def estadisticas_canal():
+    """Nombre, suscriptores, vistas totales y número de vídeos del canal."""
+    r = _data().channels().list(part="snippet,statistics", mine=True).execute()
+    s = r["items"][0]["statistics"]
+    return {
+        "nombre": r["items"][0]["snippet"]["title"],
+        "suscriptores": int(s.get("subscriberCount", 0)),
+        "vistas": int(s.get("viewCount", 0)),
+        "videos": int(s.get("videoCount", 0)),
+    }
+
+
+def vistas_shorts(desde, hasta):
+    """
+    Vistas de Shorts del canal entre dos fechas (AAAA-MM-DD), según YouTube Analytics.
+    Ojo: es una aproximación. YouTube cuenta para la monetización solo las vistas
+    "válidas" o "cualificadas", que pueden ser algo menos.
+    """
+    r = _analytics().reports().query(
+        ids="channel==MINE",
+        startDate=desde,
+        endDate=hasta,
+        metrics="views",
+        dimensions="creatorContentType",
+    ).execute()
+    for tipo, vistas in r.get("rows", []):
+        if str(tipo).upper() == "SHORTS":  # YouTube lo devuelve en minúsculas ('shorts')
+            return int(vistas)
+    return 0
 
 
 if __name__ == "__main__":

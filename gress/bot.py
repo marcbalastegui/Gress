@@ -54,6 +54,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/borrar_rec N - cancelar el recordatorio N\n\n"
         "Para el calendario: 'apunta que mañana...' o 'recuérdame el viernes a las 17:00...'\n"
         "Para un aviso rápido: 'recuérdame en 2 horas...' o 'recuérdame dentro de 30 minutos...'"
+        "/monetizacion - progreso hacia monetizar en YouTube al texto de /start"
     )
 
 
@@ -203,12 +204,14 @@ def main():
     app.add_handler(CommandHandler("videos", videos_cmd, filters=SOLO_MARC))
     app.add_handler(CommandHandler("etiquetar", videos.etiquetar, filters=SOLO_MARC))
     app.add_handler(CallbackQueryHandler(videos.elegir_categoria, pattern=r"^cat:"))
+    app.add_handler(CommandHandler("monetizacion", videos.monetizacion, filters=SOLO_MARC))
     # Mensajes de texto
     app.add_handler(MessageHandler(SOLO_MARC & filters.TEXT & ~filters.COMMAND, texto))
     app.add_handler(MessageHandler(~SOLO_MARC, intruso))
 
     # Tareas programadas
     jq = app.job_queue
+    jq.run_daily(videos.comprobar_monetizacion, time=datetime.time(21, 0, tzinfo=MADRID), name="monetizacion")
     jq.run_daily(resumen_manana, time=datetime.time(7, 30, tzinfo=MADRID), name="resumen_manana")
     jq.run_repeating(comprobar_proximos, interval=300, first=10, name="avisos_eventos")
     jq.run_repeating(enviar_recordatorios, interval=30, first=5, name="recordatorios")
