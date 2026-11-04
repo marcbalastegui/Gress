@@ -121,6 +121,28 @@ def retencion(video_id, desde, hasta):
     return porcentaje, duracion_media
 
 
+def analytics_video(video_id, desde, hasta):
+    """
+    Métricas de YouTube Analytics de un vídeo entre dos fechas (AAAA-MM-DD).
+    Devuelve un diccionario, o {} si todavía no hay datos (tardan uno o dos días).
+    """
+    metricas = [
+        "views", "estimatedMinutesWatched", "averageViewDuration", "averageViewPercentage",
+        "likes", "comments", "shares", "subscribersGained", "subscribersLost",
+    ]
+    r = _analytics().reports().query(
+        ids="channel==MINE",
+        startDate=desde,
+        endDate=hasta,
+        metrics=",".join(metricas),
+        filters=f"video=={video_id}",
+    ).execute()
+    filas = r.get("rows")
+    if not filas:
+        return {}
+    return dict(zip(metricas, filas[0]))
+
+
 def estadisticas_canal():
     """Nombre, suscriptores, vistas totales y número de vídeos del canal."""
     r = _data().channels().list(part="snippet,statistics", mine=True).execute()

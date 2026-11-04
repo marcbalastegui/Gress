@@ -857,3 +857,162 @@ async def comprobar_monetizacion(context: ContextTypes.DEFAULT_TYPE):
         return
     if texto:
         await context.bot.send_message(chat_id=CHAT_ID, text=texto)
+
+
+# ---------------------------------------------------------------------------
+# /ultimovideo: métricas en detalle del último vídeo publicado
+# ---------------------------------------------------------------------------
+
+def _pct(parte, total):
+    return f"{parte / total * 100:.1f} %" if total else "?"
+
+
+def _duracion_txt(segundos):
+    if segundos is None:
+        return "?"
+    m, s = divmod(round(segundos), 60)
+    return f"{m} min {s} s" if m else f"{s} s"
+
+
+def _edad_txt(horas):
+    return f"{horas:.0f} h" if horas < 48 else f"{horas / 24:.1f} días"
+
+
+def _hitos_comparados(con, plataforma, pub_id):
+    """Líneas con las vistas del vídeo en cada hito frente a la mediana de los demás."""
+    lineas = []
+    for hito in HITOS:
+        fila = con.execute(
+            "SELECT views FROM mediciones WHERE publicacion_id = ? AND hito = ?", (pub_id, hito)
+        ).fetchone()
+        if not fila or fila["views"] is None:
+            continue
+        otros = _mediana_anteriores(con, plataforma, hito, pub_id)
+        linea = f"   {hito}: {_miles(fila['views'])}"
+        if len(otros) >= 3:
+            med = median(otros)
+            linea += f" (mediana {_miles(round(med))}"
+            if med:
+                dif = (fila["views"] - med) / med * 100
+                linea += f", {'+' if dif >= 0 else ''}{dif:.0f} %"
+            linea += ")"
+            # Puesto entre todos los vídeos medidos en ese hito
+            todos = sorted(otros + [fila["views"]], reverse=True)
+            linea += f" · puesto {todos.index(fila['views']) + 1} de {len(todos)}"
+        lineas.append(linea)
+    return lineas
+
+
+def _bloque_youtube(con, pub, ahora):
+    vivo = next((v for v in youtube.ultimos_videos(10) if v["id"] == pub["id_externo"]), None)
+    if not vivo:
+        return ["YouTube: no encuentro el vídeo en el canal."]
+    horas = (ahora - _fecha(vivo["publicado"])).total_seconds() / 3600
+    views, likes, coms = vivo["views"], vivo["likes"], vivo["comments"]
+    lineas = [
+        f"YouTube (hace {_edad_txt(horas)}):",
+        f"• {_miles(views)} vistas · {_miles(likes)} likes · {_miles(coms)} comentarios",
+        f"• Ritmo medio: {_miles(round(views / max(horas, 1)))} vistas/hora",
+        f"• Likes por vista: {_pct(likes, views)} · comentarios por cada 1.000 vistas: "
+        f"{coms / views * 1000:.1f}" if views else "• Aún sin vistas",
+    ]
+
+    publicado = _fecha(vivo["publicado"])
+    try:
+        a = youtube.analytics_video(
+            vivo["id"], publicado.date().isoformat(), ahora.date().isoformat()
+        )
+    except Exception:
+        log.exception("No se pudo leer Analytics de %s", vivo["id"])
+        a = {}
+    if a:
+        neto = (a.get("subscribersGained") or 0) - (a.get("subscribersLost") or 0)
+        lineas += [
+            "• Analytics (con 1-2 días de retraso):",
+            f"   Retención media: {a['averageViewPercentage']:.0f} % "
+            f"(ven de media {_duracion_txt(a['averageViewDuration'])}"
+            f" de {_duracion_txt(vivo['duracion'])})",
+            f"   Minutos vistos: {_miles(round(a['estimatedMinutesWatched']))} · "
+            f"compartido {_miles(int(a['shares']))} veces",
+            f"   Suscriptores: +{_miles(int(a['subscribersGained']))} / "
+            f"-{_miles(int(a['subscribersLost']))} (neto {'+' if neto >= 0 else ''}{neto})",
+        ]
+        if vivo["views"]:
+            lineas.append(f"   Suscriptores por cada 1.000 vistas: {neto / vivo['views'] * 1000:.1f}")
+    else:
+        lineas.append("• Analytics todavía no tiene datos de este vídeo (tarda uno o dos días).")
+
+    hitos = _hitos_comparados(con, "youtube", pub["id"])
+    if hitos:
+        lineas += ["• Vistas en cada hito frente a tus otros vídeos:"] + hitos
+    return lineas
+
+
+def _bloque_instagram(con, pub, ahora, duracion):
+    vivo = next((r for r in instagram.ultimos_reels(10) if r["id"] == pub["id_externo"]), None)
+    if not vivo:
+        return ["Instagram: no encuentro el reel."]
+    horas = (ahora - _fecha(vivo["publicado"])).total_seconds() / 3600
+    lineas = [
+        f"Instagram (hace {_edad_txt(horas)}):",
+        f"• {_miles(vivo['views'])} vistas · alcance {_miles(vivo['reach'])} cuentas",
+        f"• {_miles(vivo['likes'])} likes · {_miles(vivo['comments'])} comentarios · "
+        f"{_miles(vivo['shares'])} compartidos · {_miles(vivo['saved'])} guardados",
+    ]
+    interacciones = sum(x or 0 for x in (vivo["likes"], vivo["comments"], vivo["shares"], vivo["saved"]))
+    if vivo["reach"]:
+        lineas.append(f"• Tasa de interacción: {_pct(interacciones, vivo['reach'])} del alcance")
+    if vivo["media_vista_s"] is not None:
+        texto = f"• Ven de media {_duracion_txt(vivo['media_vista_s'])}"
+        if duracion:
+            texto += f" de {_duracion_txt(duracion)} ({vivo['media_vista_s'] / duracion * 100:.0f} %)"
+        lineas.append(texto)
+    if vivo["skip_rate"] is not None:
+        lineas.append(f"• Lo pasan de largo al principio: {vivo['skip_rate']:.0f} %")
+    hitos = _hitos_comparados(con, "instagram", pub["id"])
+    if hitos:
+        lineas += ["• Vistas en cada hito frente a tus otros reels:"] + hitos
+    return lineas
+
+
+def texto_ultimo_video():
+    ahora = _ahora_utc()
+    with closing(conectar()) as con:
+        video = con.execute(
+            """SELECT v.id, v.titulo, v.categoria, v.tema FROM videos v
+               JOIN publicaciones p ON p.video_id = v.id
+               GROUP BY v.id ORDER BY MAX(p.publicado_en) DESC LIMIT 1"""
+        ).fetchone()
+        if not video:
+            return "Todavía no hay vídeos registrados."
+        pubs = con.execute(
+            "SELECT * FROM publicaciones WHERE video_id = ? ORDER BY plataforma DESC", (video["id"],)
+        ).fetchall()
+        duracion = _duracion_video(con, video["id"])
+
+        partes = [f"«{video['titulo']}»"]
+        etiquetas = [x for x in (video["categoria"], video["tema"]) if x]
+        partes.append(" · ".join(etiquetas) if etiquetas else "Sin etiquetar (usa /etiquetar)")
+        if duracion:
+            partes.append(f"Duración: {_duracion_txt(duracion)}")
+
+        for pub in pubs:
+            partes.append("")
+            try:
+                if pub["plataforma"] == "youtube":
+                    partes += _bloque_youtube(con, pub, ahora)
+                elif pub["plataforma"] == "instagram" and instagram.configurado():
+                    partes += _bloque_instagram(con, pub, ahora, duracion)
+            except Exception:
+                log.exception("Error en /ultimovideo para %s", pub["plataforma"])
+                partes.append(f"{NOMBRES.get(pub['plataforma'], pub['plataforma'])}: no he podido leer los datos.")
+    return "\n".join(partes)
+
+
+async def ultimo_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        texto = await asyncio.to_thread(texto_ultimo_video)
+    except Exception:
+        log.exception("Error en /ultimovideo")
+        texto = "No he podido preparar las métricas. Mira los logs."
+    await update.message.reply_text(texto)

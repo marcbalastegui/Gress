@@ -45,6 +45,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Gress en línea.\n"
         "/ping - comprobar que estoy vivo\n"
+        "/ultimovideo - métricas detalladas del último vídeo al texto de /start"
         "/tiempo - previsión de hoy\n"
         "/agenda - próximos eventos\n"
         "/resumen - resumen del día\n"
@@ -204,6 +205,7 @@ def main():
     app.add_handler(CommandHandler("videos", videos_cmd, filters=SOLO_MARC))
     app.add_handler(CommandHandler("etiquetar", videos.etiquetar, filters=SOLO_MARC))
     app.add_handler(CallbackQueryHandler(videos.elegir_categoria, pattern=r"^cat:"))
+    app.add_handler(CommandHandler("ultimovideo", videos.ultimo_video, filters=SOLO_MARC))
     app.add_handler(CommandHandler("monetizacion", videos.monetizacion, filters=SOLO_MARC))
     # Mensajes de texto
     app.add_handler(MessageHandler(SOLO_MARC & filters.TEXT & ~filters.COMMAND, texto))
