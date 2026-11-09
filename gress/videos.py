@@ -33,7 +33,7 @@ MADRID = ZoneInfo("Europe/Madrid")
 
 CATEGORIAS = ["Curiosidad", "Psicología", "Filosofía", "Historia"]
 CORTE_FORMATO_S = 45  # hasta 45 s = formato corto (40 s); más = formato largo (~55 s)
-NOMBRES = {"youtube": "YouTube", "instagram": "Instagram"}
+NOMBRES = {"youtube": "YouTube", "instagram": "Instagram", "tiktok": "TikTok"}
 
 # Hitos de vistas: aviso cuando una publicación cruza cada umbral
 UMBRALES_VISTAS = [1_000, 5_000, 10_000, 50_000, 100_000, 1_000_000]
@@ -66,11 +66,21 @@ HITOS = {
 }
 
 
-def _fuentes():
-    """Plataformas activas y la función que da sus últimas publicaciones."""
+def _fuentes(solo_en_vivo=False):
+    """
+    Plataformas activas y la función que da sus últimas publicaciones.
+    - En vivo: YouTube (API) e Instagram si hay token.
+    - Importadas: plataformas cuyos datos llegan por CSV (Instagram sin token, TikTok).
+      El ciclo horario usa solo_en_vivo=True: los datos importados se miden al importarlos.
+    """
     fuentes = {"youtube": lambda: youtube.ultimos_videos(50)}
     if instagram.configurado():
         fuentes["instagram"] = lambda: instagram.ultimos_reels(35)
+    if not solo_en_vivo:
+        from gress import importador  # import aquí para evitar un import circular
+        for plataforma in importador.plataformas_importadas():
+            if plataforma not in fuentes:
+                fuentes[plataforma] = (lambda p=plataforma: importador.ultimos(p))
     return fuentes
 
 
@@ -410,7 +420,7 @@ def _ciclo():
     mensajes = []
     ahora = _ahora_utc()
 
-    for plataforma, obtener in _fuentes().items():
+    for plataforma, obtener in _fuentes(solo_en_vivo=True).items():
         try:
             publicaciones = obtener()
         except Exception:
@@ -948,28 +958,32 @@ def _bloque_youtube(con, pub, ahora):
     return lineas
 
 
-def _bloque_instagram(con, pub, ahora, duracion):
-    vivo = next((r for r in instagram.ultimos_reels(10) if r["id"] == pub["id_externo"]), None)
+def _bloque_instagram(con, pub, ahora, duracion, obtener):
+    """Bloque para Instagram o TikTok (mismos campos, vengan de la API o de un CSV)."""
+    nombre = NOMBRES[pub["plataforma"]]
+    vivo = next((r for r in obtener() if r["id"] == pub["id_externo"]), None)
     if not vivo:
-        return ["Instagram: no encuentro el reel."]
+        return [f"{nombre}: no encuentro la publicación."]
     horas = (ahora - _fecha(vivo["publicado"])).total_seconds() / 3600
     lineas = [
-        f"Instagram (hace {_edad_txt(horas)}):",
-        f"• {_miles(vivo['views'])} vistas · alcance {_miles(vivo['reach'])} cuentas",
+        f"{nombre} (hace {_edad_txt(horas)}{', datos del último CSV' if vivo.get('importado_en') else ''}):",
+        f"• {_miles(vivo['views'])} vistas · alcance {_miles(vivo.get('reach'))} cuentas",
         f"• {_miles(vivo['likes'])} likes · {_miles(vivo['comments'])} comentarios · "
         f"{_miles(vivo['shares'])} compartidos · {_miles(vivo['saved'])} guardados",
     ]
-    interacciones = sum(x or 0 for x in (vivo["likes"], vivo["comments"], vivo["shares"], vivo["saved"]))
-    if vivo["reach"]:
+    interacciones = sum(x or 0 for x in (vivo["likes"], vivo["comments"], vivo.get("shares"), vivo.get("saved")))
+    if vivo.get("reach"):
         lineas.append(f"• Tasa de interacción: {_pct(interacciones, vivo['reach'])} del alcance")
-    if vivo["media_vista_s"] is not None:
+    if vivo.get("follows"):
+        lineas.append(f"• Nuevos seguidores gracias a este vídeo: {_miles(vivo['follows'])}")
+    if vivo.get("media_vista_s") is not None:
         texto = f"• Ven de media {_duracion_txt(vivo['media_vista_s'])}"
         if duracion:
             texto += f" de {_duracion_txt(duracion)} ({vivo['media_vista_s'] / duracion * 100:.0f} %)"
         lineas.append(texto)
-    if vivo["skip_rate"] is not None:
+    if vivo.get("skip_rate") is not None:
         lineas.append(f"• Lo pasan de largo al principio: {vivo['skip_rate']:.0f} %")
-    hitos = _hitos_comparados(con, "instagram", pub["id"])
+    hitos = _hitos_comparados(con, pub["plataforma"], pub["id"])
     if hitos:
         lineas += ["• Vistas en cada hito frente a tus otros reels:"] + hitos
     return lineas
@@ -990,6 +1004,7 @@ def texto_ultimo_video():
         ).fetchall()
         duracion = _duracion_video(con, video["id"])
 
+        fuentes = _fuentes()
         partes = [f"«{video['titulo']}»"]
         etiquetas = [x for x in (video["categoria"], video["tema"]) if x]
         partes.append(" · ".join(etiquetas) if etiquetas else "Sin etiquetar (usa /etiquetar)")
@@ -1001,8 +1016,8 @@ def texto_ultimo_video():
             try:
                 if pub["plataforma"] == "youtube":
                     partes += _bloque_youtube(con, pub, ahora)
-                elif pub["plataforma"] == "instagram" and instagram.configurado():
-                    partes += _bloque_instagram(con, pub, ahora, duracion)
+                elif pub["plataforma"] in fuentes:
+                    partes += _bloque_instagram(con, pub, ahora, duracion, fuentes[pub["plataforma"]])
             except Exception:
                 log.exception("Error en /ultimovideo para %s", pub["plataforma"])
                 partes.append(f"{NOMBRES.get(pub['plataforma'], pub['plataforma'])}: no he podido leer los datos.")
@@ -1015,4 +1030,97 @@ async def ultimo_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         log.exception("Error en /ultimovideo")
         texto = "No he podido preparar las métricas. Mira los logs."
+    await update.message.reply_text(texto)
+
+
+# ---------------------------------------------------------------------------
+# /topN: los N mejores o peores vídeos por vistas totales
+# ---------------------------------------------------------------------------
+
+TOP_MAXIMO = 10
+
+
+def texto_top(n, orden="D"):
+    """
+    n: número de vídeos (1 a TOP_MAXIMO).
+    orden: 'D' = los mejores, de mejor a peor; 'A' = los peores, de peor a mejor.
+    Las vistas son las actuales, sumando todas las plataformas activas.
+    """
+    n = max(1, min(n, TOP_MAXIMO))
+    ahora = _ahora_utc()
+
+    # Vistas actuales de cada publicación, leídas en directo de cada plataforma
+    actuales = {}  # (plataforma, id_externo) -> vistas
+    for plataforma, obtener in _fuentes().items():
+        try:
+            for v in obtener():
+                if v.get("views") is not None:
+                    actuales[(plataforma, v["id"])] = v["views"]
+        except Exception:
+            log.exception("No se pudo leer %s para /top", NOMBRES[plataforma])
+
+    with closing(conectar()) as con:
+        filas = con.execute(
+            """SELECT v.id, v.titulo, v.categoria, p.plataforma, p.id_externo, p.publicado_en
+               FROM videos v JOIN publicaciones p ON p.video_id = v.id"""
+        ).fetchall()
+
+    videos_ = {}
+    for r in filas:
+        d = videos_.setdefault(r["id"], {
+            "titulo": r["titulo"], "categoria": r["categoria"],
+            "publicado": r["publicado_en"], "por_plataforma": {},
+        })
+        d["publicado"] = min(d["publicado"], r["publicado_en"])
+        vistas = actuales.get((r["plataforma"], r["id_externo"]))
+        if vistas is not None:
+            d["por_plataforma"][r["plataforma"]] = vistas
+
+    con_datos = [d for d in videos_.values() if d["por_plataforma"]]
+    if not con_datos:
+        return "No tengo vistas de ningún vídeo todavía."
+    for d in con_datos:
+        d["total"] = sum(d["por_plataforma"].values())
+
+    mejores_primero = orden.upper() != "A"
+    con_datos.sort(key=lambda d: d["total"], reverse=mejores_primero)
+    elegidos = con_datos[:n]
+
+    titulo = f"Top {len(elegidos)} {'mejores' if mejores_primero else 'peores'} vídeos (vistas totales)"
+    lineas = [titulo, ""]
+    for i, d in enumerate(elegidos, 1):
+        dias = (ahora - _fecha(d["publicado"])).days
+        detalle = " · ".join(
+            f"{NOMBRES[p]} {_miles(x)}" for p, x in sorted(d["por_plataforma"].items())
+        )
+        cat = f" · {d['categoria']}" if d["categoria"] else ""
+        lineas.append(f"{i}. {d['titulo']}: {_miles(d['total'])}")
+        lineas.append(f"   {detalle} · hace {dias} días{cat}")
+    lineas += ["", "Ojo: los vídeos más antiguos han tenido más tiempo para sumar vistas."]
+    return "\n".join(lineas)
+
+
+async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Acepta /top5 D, /top10 A o /top 5 D. Sin orden, D (los mejores).
+    """
+    comando = update.message.text.split()[0].split("@")[0]  # '/top5' o '/top'
+    args = list(context.args)
+    numero = comando[4:]
+    if not numero and args and args[0].isdigit():
+        numero = args.pop(0)
+    if not numero.isdigit():
+        await update.message.reply_text(
+            "Uso: /top5 D (los 5 mejores) o /top5 A (los 5 peores). Máximo 10."
+        )
+        return
+    orden = args[0].upper() if args else "D"
+    if orden not in ("A", "D"):
+        await update.message.reply_text("El orden tiene que ser D (mejores) o A (peores).")
+        return
+    try:
+        texto = await asyncio.to_thread(texto_top, int(numero), orden)
+    except Exception:
+        log.exception("Error en /top")
+        texto = "No he podido preparar el top. Mira los logs."
     await update.message.reply_text(texto)

@@ -20,6 +20,7 @@ from gress.avisos import (
 )
 from gress import memoria
 from gress import videos
+from gress import importador
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -56,6 +57,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Para el calendario: 'apunta que mañana...' o 'recuérdame el viernes a las 17:00...'\n"
         "Para un aviso rápido: 'recuérdame en 2 horas...' o 'recuérdame dentro de 30 minutos...'"
         "/monetizacion - progreso hacia monetizar en YouTube al texto de /start"
+        "/topN D|A - los N mejores (D) o peores (A) vídeos"
     )
 
 
@@ -183,6 +185,7 @@ async def intruso(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     memoria.iniciar()  # Crea las tablas si no existen
     videos.iniciar()
+    importador.iniciar()
 
     app = (
         ApplicationBuilder()
@@ -207,6 +210,8 @@ def main():
     app.add_handler(CallbackQueryHandler(videos.elegir_categoria, pattern=r"^cat:"))
     app.add_handler(CommandHandler("ultimovideo", videos.ultimo_video, filters=SOLO_MARC))
     app.add_handler(CommandHandler("monetizacion", videos.monetizacion, filters=SOLO_MARC))
+    app.add_handler(CommandHandler(["top"] + [f"top{i}" for i in range(1, 11)], videos.top, filters=SOLO_MARC))
+    app.add_handler(MessageHandler(SOLO_MARC & filters.Document.FileExtension("csv"), importador.recibir_csv))
     # Mensajes de texto
     app.add_handler(MessageHandler(SOLO_MARC & filters.TEXT & ~filters.COMMAND, texto))
     app.add_handler(MessageHandler(~SOLO_MARC, intruso))
