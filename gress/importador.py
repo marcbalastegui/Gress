@@ -1,5 +1,5 @@
 """
-Importación manual de estadísticas desde CSV (Instagram y, más adelante, TikTok).
+Importación manual de estadísticas desde CSV (Instagram y TikTok).
 
 Flujo: exportas el CSV de la plataforma y se lo mandas a Gress por Telegram como archivo.
 Gress detecta de qué plataforma es por sus columnas, guarda la última foto de cada
@@ -29,6 +29,12 @@ log = logging.getLogger("gress")
 # Meta exporta las horas de publicación en hora del Pacífico (sede de Meta).
 # Lo hemos comprobado: tus vídeos de las 00:00 en Madrid salen a las 15:00 del día anterior.
 HORA_META = ZoneInfo("America/Los_Angeles")
+
+MADRID = ZoneInfo("Europe/Madrid")
+MESES = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6, "julio": 7,
+    "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12,
+}
 
 # hito: (horas desde la publicación, margen). Márgenes amplios por ser una lectura al día.
 HITOS_IMPORTADOS = {
@@ -123,6 +129,60 @@ def _leer_instagram(filas):
     return pubs
 
 
+def _es_tiktok(columnas):
+    return {"Video link", "Post time", "Total views"} <= set(columnas)
+
+
+def _fecha_tiktok(texto, hoy):
+    """
+    TikTok da la fecha de publicación como '1 de noviembre', sin año ni hora (en hora de Madrid).
+    Se asume el año actual, o el anterior si la fecha quedaría en el futuro.
+    Como publicas a las 00:00, se toma esa hora.
+    """
+    m = re.match(r"(\d{1,2}) de ([a-záéíóú]+)", texto.strip().lower())
+    if not m or m.group(2) not in MESES:
+        raise ValueError(f"Fecha de TikTok no reconocida: {texto!r}")
+    dia, mes = int(m.group(1)), MESES[m.group(2)]
+    anio = hoy.year if (mes, dia) <= (hoy.month, hoy.day) else hoy.year - 1
+    local = datetime.datetime(anio, mes, dia, 0, 0, tzinfo=MADRID)
+    return local.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _titulo_tiktok(texto):
+    """El título de TikTok es la descripción entera en una línea: se corta en la primera frase."""
+    texto = (texto or "").strip()
+    m = re.search(r"[?!.]", texto)
+    if m and m.end() <= 100:
+        texto = texto[:m.end()]
+    return texto if len(texto) <= 80 else texto[:77] + "..."
+
+
+def _leer_tiktok(filas):
+    hoy = datetime.datetime.now(MADRID).date()
+    pubs = []
+    for f in filas:
+        enlace = (f.get("Video link") or "").strip()
+        m = re.search(r"/video/(\d+)", enlace)
+        if not m:
+            continue
+        pubs.append({
+            "id": m.group(1),
+            "titulo": _titulo_tiktok(f.get("Video title")),
+            "publicado": _fecha_tiktok(f["Post time"], hoy),
+            "duracion": None,
+            "views": _entero(f.get("Total views")),
+            "reach": None,
+            "likes": _entero(f.get("Total likes")),
+            "comments": _entero(f.get("Total comments")),
+            "shares": _entero(f.get("Total shares")),
+            "saved": None,
+            "follows": None,
+            "media_vista_s": None,
+            "skip_rate": None,
+        })
+    return pubs
+
+
 def _fin_del_periodo(nombre_archivo, ahora):
     """
     Meta pone el periodo en el nombre del archivo: 'Oct-12-2026_Nov-08-2026_....csv'.
@@ -144,15 +204,41 @@ def _fin_del_periodo(nombre_archivo, ahora):
 # Importar
 # ---------------------------------------------------------------------------
 
+# TikTok exporta comillas sin escapar dentro de los títulos (p. ej. it's "quite terrible"),
+# lo que rompe un lector CSV normal. Como cada vídeo ocupa una sola línea, se lee con un patrón.
+PATRON_TIKTOK = re.compile(
+    r'^"(?P<Time>[^"]*)","(?P<title>.*)","(?P<link>https?://[^"]+)","(?P<post>[^"]*)",'
+    r'"(?P<likes>\d*)","(?P<comments>\d*)","(?P<shares>\d*)","(?P<views>\d*)"\s*$'
+)
+
+
+def _filas_tiktok(texto):
+    filas = []
+    for linea in texto.splitlines()[1:]:
+        m = PATRON_TIKTOK.match(linea)
+        if m:
+            filas.append({
+                "Video title": m["title"], "Video link": m["link"], "Post time": m["post"],
+                "Total likes": m["likes"], "Total comments": m["comments"],
+                "Total shares": m["shares"], "Total views": m["views"],
+            })
+        elif linea.strip():
+            log.warning("Línea de TikTok no reconocida: %s", linea[:80])
+    return filas
+
+
 def importar(texto, nombre_archivo=""):
     """Importa el contenido de un CSV. Devuelve el texto de respuesta para Telegram."""
     lector = csv.DictReader(io.StringIO(texto))
     columnas = lector.fieldnames or []
-    filas = list(lector)
+    filas = _filas_tiktok(texto) if _es_tiktok(columnas) else list(lector)
 
     if _es_instagram(columnas):
         plataforma = "instagram"
         pubs = _leer_instagram(filas)
+    elif _es_tiktok(columnas):
+        plataforma = "tiktok"
+        pubs = _leer_tiktok(filas)
     elif {"Date", "Video Views"} <= set(columnas) and "Post ID" not in columnas:
         return ("Este CSV es el resumen diario de la cuenta (Overview), no el de cada vídeo. "
                 "En TikTok Studio exporta la sección de Contenido.")
@@ -160,7 +246,7 @@ def importar(texto, nombre_archivo=""):
         return "No reconozco este CSV. Columnas: " + ", ".join(columnas[:12])
 
     if not pubs:
-        return "El archivo no tiene reels."
+        return "El archivo no tiene vídeos."
 
     ahora = videos._ahora_utc()
     medido_en = _fin_del_periodo(nombre_archivo, ahora)
@@ -208,7 +294,7 @@ def importar(texto, nombre_archivo=""):
                 if hito not in hechos and horas <= edad_h < horas + margen:
                     videos._medir(con, plataforma, pub_id, video_id, v, hito, horas, medido_en)
 
-    partes = [f"{nombre}: {len(pubs)} reels importados"
+    partes = [f"{nombre}: {len(pubs)} vídeos importados"
               + (f" ({nuevos} nuevos)." if nuevos else ".")]
     if arranque:
         partes.append("Primera importación: a partir de la próxima te diré cuánto ha crecido cada uno.")

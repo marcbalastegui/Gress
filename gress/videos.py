@@ -1040,24 +1040,29 @@ async def ultimo_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
 TOP_MAXIMO = 10
 
 
-def texto_top(n, orden="D"):
+FILTROS_TOP = {"-all": None, "-yt": "youtube", "-ig": "instagram", "-tt": "tiktok"}
+
+
+def texto_top(n, orden="D", plataforma=None):
     """
     n: número de vídeos (1 a TOP_MAXIMO).
     orden: 'D' = los mejores, de mejor a peor; 'A' = los peores, de peor a mejor.
-    Las vistas son las actuales, sumando todas las plataformas activas.
+    plataforma: None = suma de todas las plataformas; o 'youtube', 'instagram', 'tiktok'.
     """
     n = max(1, min(n, TOP_MAXIMO))
     ahora = _ahora_utc()
 
     # Vistas actuales de cada publicación, leídas en directo de cada plataforma
     actuales = {}  # (plataforma, id_externo) -> vistas
-    for plataforma, obtener in _fuentes().items():
+    for nombre_p, obtener in _fuentes().items():
+        if plataforma and nombre_p != plataforma:
+            continue
         try:
             for v in obtener():
                 if v.get("views") is not None:
-                    actuales[(plataforma, v["id"])] = v["views"]
+                    actuales[(nombre_p, v["id"])] = v["views"]
         except Exception:
-            log.exception("No se pudo leer %s para /top", NOMBRES[plataforma])
+            log.exception("No se pudo leer %s para /top", NOMBRES[nombre_p])
 
     with closing(conectar()) as con:
         filas = con.execute(
@@ -1078,6 +1083,8 @@ def texto_top(n, orden="D"):
 
     con_datos = [d for d in videos_.values() if d["por_plataforma"]]
     if not con_datos:
+        if plataforma:
+            return f"No tengo vistas de {NOMBRES[plataforma]} todavía."
         return "No tengo vistas de ningún vídeo todavía."
     for d in con_datos:
         d["total"] = sum(d["por_plataforma"].values())
@@ -1086,32 +1093,45 @@ def texto_top(n, orden="D"):
     con_datos.sort(key=lambda d: d["total"], reverse=mejores_primero)
     elegidos = con_datos[:n]
 
-    titulo = f"Top {len(elegidos)} {'mejores' if mejores_primero else 'peores'} vídeos (vistas totales)"
+    ambito = NOMBRES[plataforma] if plataforma else "todas las plataformas"
+    titulo = (f"Top {len(elegidos)} {'mejores' if mejores_primero else 'peores'} vídeos "
+              f"({ambito})")
     lineas = [titulo, ""]
     for i, d in enumerate(elegidos, 1):
         dias = (ahora - _fecha(d["publicado"])).days
-        detalle = " · ".join(
-            f"{NOMBRES[p]} {_miles(x)}" for p, x in sorted(d["por_plataforma"].items())
-        )
         cat = f" · {d['categoria']}" if d["categoria"] else ""
-        lineas.append(f"{i}. {d['titulo']}: {_miles(d['total'])}")
-        lineas.append(f"   {detalle} · hace {dias} días{cat}")
+        if plataforma:
+            lineas.append(f"{i}. {d['titulo']}: {_miles(d['total'])} vistas")
+            lineas.append(f"   hace {dias} días{cat}")
+        else:
+            orden_p = [p for p in NOMBRES if p in d["por_plataforma"]]
+            detalle = " · ".join(f"{NOMBRES[p]} {_miles(d['por_plataforma'][p])}" for p in orden_p)
+            lineas.append(f"{i}. {d['titulo']}: {_miles(d['total'])} vistas en total")
+            lineas.append(f"   {detalle} · hace {dias} días{cat}")
     lineas += ["", "Ojo: los vídeos más antiguos han tenido más tiempo para sumar vistas."]
     return "\n".join(lineas)
 
 
 async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Acepta /top5 D, /top10 A o /top 5 D. Sin orden, D (los mejores).
+    Acepta /top5 D, /top10 A -yt o /top 5 D -all. Sin orden, D (los mejores).
+    Filtros: -all (suma de todas, por defecto), -yt, -ig, -tt.
     """
     comando = update.message.text.split()[0].split("@")[0]  # '/top5' o '/top'
     args = list(context.args)
+    filtros = [a.lower() for a in args if a.startswith("-")]
+    args = [a for a in args if not a.startswith("-")]
+    if any(f not in FILTROS_TOP for f in filtros):
+        await update.message.reply_text("Filtros válidos: -all, -yt, -ig, -tt.")
+        return
+    plataforma = FILTROS_TOP[filtros[-1]] if filtros else None
     numero = comando[4:]
     if not numero and args and args[0].isdigit():
         numero = args.pop(0)
     if not numero.isdigit():
         await update.message.reply_text(
-            "Uso: /top5 D (los 5 mejores) o /top5 A (los 5 peores). Máximo 10."
+            "Uso: /top5 D (los 5 mejores) o /top5 A (los 5 peores). Máximo 10.\n"
+            "Opcional: -all (suma de todas, por defecto), -yt, -ig o -tt."
         )
         return
     orden = args[0].upper() if args else "D"
@@ -1119,7 +1139,7 @@ async def top(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("El orden tiene que ser D (mejores) o A (peores).")
         return
     try:
-        texto = await asyncio.to_thread(texto_top, int(numero), orden)
+        texto = await asyncio.to_thread(texto_top, int(numero), orden, plataforma)
     except Exception:
         log.exception("Error en /top")
         texto = "No he podido preparar el top. Mira los logs."
